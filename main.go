@@ -26,5 +26,7 @@ func NewRouter() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
+	r.Get("/books", newListBooksHandler())
+	r.Get("/books/{id}", newGetBookHandler())
 	return r
 }
