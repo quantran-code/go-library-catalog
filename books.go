@@ -50,6 +50,38 @@ func newGetBookHandler() http.HandlerFunc {
 	}
 }
 
+// availabilityUpdate is the body of a PATCH /books/{id}/availability request.
+// Available is a pointer so that an omitted field is distinguishable from an
+// explicit false.
+type availabilityUpdate struct {
+	Available *bool `json:"available"`
+}
+
+// newUpdateAvailabilityHandler answers PATCH /books/{id}/availability by
+// writing the requested flag into the catalogue.
+func newUpdateAvailabilityHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.Atoi(chi.URLParam(r, "id"))
+		if err != nil || id <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid book id"})
+			return
+		}
+		var update availabilityUpdate
+		if err := json.NewDecoder(r.Body).Decode(&update); err != nil || update.Available == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		for i := range books {
+			if books[i].ID == id {
+				books[i].Available = *update.Available
+				writeJSON(w, http.StatusOK, books[i])
+				return
+			}
+		}
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
+	}
+}
+
 // writeJSON writes status and payload as a JSON response.
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")

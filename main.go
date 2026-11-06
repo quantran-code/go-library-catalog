@@ -28,5 +28,6 @@ func NewRouter() http.Handler {
 	})
 	r.Get("/books", newListBooksHandler())
 	r.Get("/books/{id}", newGetBookHandler())
+	r.Patch("/books/{id}/availability", newUpdateAvailabilityHandler())
 	return r
 }
