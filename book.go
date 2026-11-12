@@ -1,6 +1,10 @@
 package main
 
-import "sync"
+import (
+	"strings"
+	"sync"
+	"unicode"
+)
 
 // Book is a single catalogue record.
 type Book struct {
@@ -36,6 +40,85 @@ func (s *BookStore) List() []Book {
 	books := make([]Book, len(s.books))
 	copy(books, s.books)
 	return books
+}
+
+// Page returns the books that match query together with the total number of
+// matches before paging. The query is matched case-insensitively as a
+// substring of the title or the author, or as a run of word prefixes, so a
+// glued query such as "golang" still finds "The Go Programming Language"; an
+// empty query matches every book.
+func (s *BookStore) Page(query string, page, pageSize int) ([]Book, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	needle := strings.ToLower(strings.TrimSpace(query))
+	matches := make([]Book, 0, len(s.books))
+	for _, book := range s.books {
+		if !matchesQuery(book, needle) {
+			continue
+		}
+		matches = append(matches, book)
+	}
+
+	total := len(matches)
+	start := (page - 1) * pageSize
+	if start < 0 {
+		start = 0
+	}
+	if start >= total {
+		return make([]Book, 0), total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+	books := make([]Book, 0, end-start)
+	books = append(books, matches[start:end]...)
+	return books, total
+}
+
+// matchesQuery reports whether needle matches the book's title or author,
+// either as a plain case-insensitive substring or as a run of word prefixes. An
+// empty needle matches every book.
+func matchesQuery(book Book, needle string) bool {
+	if needle == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(book.Title), needle) ||
+		strings.Contains(strings.ToLower(book.Author), needle) ||
+		matchesWordPrefixes(book.Title, needle) ||
+		matchesWordPrefixes(book.Author, needle)
+}
+
+// matchesWordPrefixes reports whether needle can be split into pieces that each
+// spell the beginning of a word of hay, in that order. Words may be skipped, so
+// "golang" matches "The Go Programming Language".
+func matchesWordPrefixes(hay, needle string) bool {
+	words := strings.FieldsFunc(strings.ToLower(hay), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	return wordPrefixesMatch(words, needle)
+}
+
+// wordPrefixesMatch walks the words left to right and tries every prefix length
+// of each word, backtracking when a choice leaves the rest of the needle
+// unmatched.
+func wordPrefixesMatch(words []string, needle string) bool {
+	if needle == "" {
+		return true
+	}
+	for i, word := range words {
+		limit := len(word)
+		if len(needle) < limit {
+			limit = len(needle)
+		}
+		for n := limit; n >= 1; n-- {
+			if word[:n] == needle[:n] && wordPrefixesMatch(words[i+1:], needle[n:]) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Get returns the book with the given id and whether it was found.

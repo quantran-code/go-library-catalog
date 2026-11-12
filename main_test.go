@@ -24,18 +24,36 @@ func TestHealthReportsTheServiceIsUp(t *testing.T) {
 	}
 }
 
-func TestListBooksReturnsSeededCatalogue(t *testing.T) {
+// catalogueOf issues GET /books with the given raw query string and returns the
+// recorder along with the decoded page envelope when the answer was a 200.
+func catalogueOf(t *testing.T, rawQuery string) (*httptest.ResponseRecorder, bookPage) {
+	t.Helper()
+
+	target := "/books"
+	if rawQuery != "" {
+		target += "?" + rawQuery
+	}
+
 	rec := httptest.NewRecorder()
-	NewRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/books", nil))
+	NewRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+
+	var page bookPage
+	if rec.Code == http.StatusOK {
+		if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+			t.Fatalf("decoding catalogue: %v", err)
+		}
+	}
+	return rec, page
+}
+
+func TestListBooksReturnsSeededCatalogue(t *testing.T) {
+	rec, page := catalogueOf(t, "")
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d", rec.Code)
 	}
 
-	var books []Book
-	if err := json.NewDecoder(rec.Body).Decode(&books); err != nil {
-		t.Fatalf("decoding catalogue: %v", err)
-	}
+	books := page.Items
 	if len(books) < 3 {
 		t.Fatalf("expected at least 3 books, got %d", len(books))
 	}
@@ -58,6 +76,148 @@ func TestListBooksReturnsSeededCatalogue(t *testing.T) {
 		if !book.Available {
 			t.Fatalf("book %d is not seeded as available", book.ID)
 		}
+	}
+}
+
+func TestListBooksDefaultsToFirstPage(t *testing.T) {
+	rec, page := catalogueOf(t, "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if page.Page != 1 {
+		t.Fatalf("page %d, want 1", page.Page)
+	}
+	if page.PageSize != 20 {
+		t.Fatalf("page_size %d, want 20", page.PageSize)
+	}
+	if page.Total != 4 {
+		t.Fatalf("total %d, want 4", page.Total)
+	}
+	if len(page.Items) != 4 {
+		t.Fatalf("expected all four seeded books on the default page, got %d", len(page.Items))
+	}
+}
+
+func TestListBooksPagesWithoutGapsOrOverlap(t *testing.T) {
+	seeded := NewBookStore().List()
+	if len(seeded) != 4 {
+		t.Fatalf("seed holds %d books, want 4", len(seeded))
+	}
+
+	seen := make(map[int]bool)
+
+	for _, wanted := range []int{1, 2} {
+		rec, page := catalogueOf(t, "page="+strconv.Itoa(wanted)+"&page_size=2")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("page %d: status %d", wanted, rec.Code)
+		}
+		if page.Total != 4 {
+			t.Fatalf("page %d: total %d, want 4", wanted, page.Total)
+		}
+		if len(page.Items) != 2 {
+			t.Fatalf("page %d: %d items, want 2", wanted, len(page.Items))
+		}
+
+		first := seeded[(wanted-1)*2]
+		second := seeded[(wanted-1)*2+1]
+		if page.Items[0].ID != first.ID || page.Items[1].ID != second.ID {
+			t.Fatalf("page %d holds ids %d and %d, want %d and %d",
+				wanted, page.Items[0].ID, page.Items[1].ID, first.ID, second.ID)
+		}
+
+		for _, book := range page.Items {
+			if seen[book.ID] {
+				t.Fatalf("book %d appears on more than one page", book.ID)
+			}
+			seen[book.ID] = true
+		}
+	}
+
+	if len(seen) != 4 {
+		t.Fatalf("pages hold %d distinct books, want 4", len(seen))
+	}
+
+	for _, book := range NewBookStore().List() {
+		if !seen[book.ID] {
+			t.Fatalf("book %d is missing from the paged catalogue", book.ID)
+		}
+	}
+
+	rec, page := catalogueOf(t, "page=3&page_size=2")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("page 3: status %d", rec.Code)
+	}
+	if page.Total != 4 {
+		t.Fatalf("page 3: total %d, want 4", page.Total)
+	}
+	if len(page.Items) != 0 {
+		t.Fatalf("page 3: %d items, want none", len(page.Items))
+	}
+}
+
+func TestListBooksRejectsInvalidPaging(t *testing.T) {
+	for _, rawQuery := range []string{"page=0", "page=-1", "page=abc", "page_size=0", "page_size=101", "page_size=1.5"} {
+		rec, _ := catalogueOf(t, rawQuery)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status %d, want %d", rawQuery, rec.Code, http.StatusBadRequest)
+		}
+		if !strings.Contains(rec.Body.String(), `"error":"invalid paging"`) {
+			t.Fatalf("%s: unexpected body: %s", rawQuery, rec.Body.String())
+		}
+	}
+
+	for _, rawQuery := range []string{"page_size=1", "page_size=100"} {
+		rec, _ := catalogueOf(t, rawQuery)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d, want %d", rawQuery, rec.Code, http.StatusOK)
+		}
+	}
+}
+
+func TestListBooksSearchesTitleAndAuthor(t *testing.T) {
+	rec, page := catalogueOf(t, "q=golang")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if page.Total != 1 {
+		t.Fatalf("total %d, want 1", page.Total)
+	}
+	if len(page.Items) != 1 || page.Items[0].Title != "The Go Programming Language" {
+		t.Fatalf("unexpected items: %+v", page.Items)
+	}
+
+	rec, page = catalogueOf(t, "q=HUNT")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if page.Total != 1 {
+		t.Fatalf("total %d, want 1", page.Total)
+	}
+	if len(page.Items) != 1 || page.Items[0].Author != "Andrew Hunt" {
+		t.Fatalf("unexpected items: %+v", page.Items)
+	}
+}
+
+func TestListBooksNoMatchAnswersEmptyItemsArray(t *testing.T) {
+	rec, page := catalogueOf(t, "q=zzzz-no-such-book")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if page.Total != 0 {
+		t.Fatalf("total %d, want 0", page.Total)
+	}
+	if len(page.Items) != 0 {
+		t.Fatalf("unexpected items: %+v", page.Items)
+	}
+	if !strings.Contains(rec.Body.String(), `"items":[]`) {
+		t.Fatalf("items is not an empty array: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "null") {
+		t.Fatalf("body carries a null: %s", rec.Body.String())
 	}
 }
 
