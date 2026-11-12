@@ -50,3 +50,18 @@ func (s *BookStore) Get(id int) (Book, bool) {
 	}
 	return Book{}, false
 }
+
+// SetAvailable takes the book with the given id on or off the shelf and
+// returns the updated record with whether the id was found.
+func (s *BookStore) SetAvailable(id int, available bool) (Book, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.books {
+		if s.books[i].ID == id {
+			s.books[i].Available = available
+			return s.books[i], true
+		}
+	}
+	return Book{}, false
+}

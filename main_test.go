@@ -98,3 +98,81 @@ func TestGetUnknownBookAnswers404(t *testing.T) {
 		t.Fatalf("status %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
+
+// availableOf reads a book through the router and reports whether it is on the shelf.
+func availableOf(t *testing.T, router http.Handler, id int) bool {
+	t.Helper()
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/books/"+strconv.Itoa(id), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+
+	var book Book
+	if err := json.NewDecoder(rec.Body).Decode(&book); err != nil {
+		t.Fatalf("decoding book: %v", err)
+	}
+	return book.Available
+}
+
+func TestSetAvailabilityTakesAndRestoresTheCopy(t *testing.T) {
+	router := newRouter(NewBookStore())
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPatch, "/books/1/availability", strings.NewReader(`{"available": false}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"available":false`) {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+	if availableOf(t, router, 1) {
+		t.Fatal("book 1 is still available after being taken off the shelf")
+	}
+
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPatch, "/books/1/availability", strings.NewReader(`{"available": true}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if !availableOf(t, router, 1) {
+		t.Fatal("book 1 was not put back on the shelf")
+	}
+}
+
+func TestSetAvailabilityIsIdempotent(t *testing.T) {
+	router := newRouter(NewBookStore())
+
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPatch, "/books/1/availability", strings.NewReader(`{"available": false}`)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %d: status %d", i+1, rec.Code)
+		}
+	}
+}
+
+func TestSetAvailabilityForUnknownBookAnswers404(t *testing.T) {
+	rec := httptest.NewRecorder()
+	NewRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodPatch, "/books/9999/availability", strings.NewReader(`{"available": false}`)))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	if !strings.Contains(rec.Body.String(), `"error":"book not found"`) {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func TestSetAvailabilityWithMalformedBodyAnswers400(t *testing.T) {
+	rec := httptest.NewRecorder()
+	NewRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodPatch, "/books/1/availability", strings.NewReader(`{`)))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(rec.Body.String(), `"error":"invalid request body"`) {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}

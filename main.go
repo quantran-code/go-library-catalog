@@ -34,7 +34,45 @@ func newRouter(store *BookStore) http.Handler {
 	})
 	r.Get("/books", listBooks(store))
 	r.Get("/books/{id}", getBook(store))
+	r.Patch("/books/{id}/availability", setAvailability(store))
 	return r
+}
+
+// availabilityRequest carries the availability a book should be set to. The
+// pointer field keeps a missing key distinguishable from an explicit false.
+type availabilityRequest struct {
+	Available *bool `json:"available"`
+}
+
+// writeJSON answers with the given status and body encoded as JSON.
+func writeJSON(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+// setAvailability puts the book named in the path on or off the shelf.
+func setAvailability(store *BookStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req availabilityRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Available == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+
+		id, err := strconv.Atoi(chi.URLParam(r, "id"))
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
+			return
+		}
+
+		book, ok := store.SetAvailable(id, *req.Available)
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, book)
+	}
 }
 
 // listBooks answers with every book in the catalogue.
