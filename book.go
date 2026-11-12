@@ -134,6 +134,47 @@ func (s *BookStore) Get(id int) (Book, bool) {
 	return Book{}, false
 }
 
+// Import adds the records to the catalogue and reports how many were added and
+// how many were skipped. New books continue the catalogue's id sequence, and a
+// (title, author) pair already present or already accepted from the same batch
+// is skipped, comparing case-insensitively so the first occurrence wins.
+func (s *BookStore) Import(records []bookRecord) (imported int, skipped int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	nextID := 1
+	seen := make(map[string]struct{}, len(s.books)+len(records))
+	for _, book := range s.books {
+		if book.ID >= nextID {
+			nextID = book.ID + 1
+		}
+		seen[bookKey(book.Title, book.Author)] = struct{}{}
+	}
+
+	for _, record := range records {
+		key := bookKey(record.Title, record.Author)
+		if _, exists := seen[key]; exists {
+			skipped++
+			continue
+		}
+		seen[key] = struct{}{}
+		s.books = append(s.books, Book{
+			ID:        nextID,
+			Title:     record.Title,
+			Author:    record.Author,
+			Available: record.Available,
+		})
+		nextID++
+		imported++
+	}
+	return imported, skipped
+}
+
+// bookKey is the case-insensitive identity of a book for duplicate detection.
+func bookKey(title, author string) string {
+	return strings.ToLower(strings.TrimSpace(title)) + "\x00" + strings.ToLower(strings.TrimSpace(author))
+}
+
 // SetAvailable takes the book with the given id on or off the shelf and
 // returns the updated record with whether the id was found.
 func (s *BookStore) SetAvailable(id int, available bool) (Book, bool) {

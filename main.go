@@ -34,7 +34,11 @@ func newRouter(store *BookStore) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
+	// The static import and export paths are registered before /books/{id} so
+	// neither is ever read as an id.
 	r.Get("/books", listBooks(store))
+	r.Get("/books/export", exportBooks(store))
+	r.Post("/books/import", importBooks(store))
 	r.Get("/books/{id}", getBook(store))
 	r.Patch("/books/{id}/availability", setAvailability(store))
 	return withRequestID(r)
