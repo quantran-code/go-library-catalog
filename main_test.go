@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -174,5 +177,107 @@ func TestSetAvailabilityWithMalformedBodyAnswers400(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"error":"invalid request body"`) {
 		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+// logLines splits captured log output into its non-empty lines.
+func logLines(buf *bytes.Buffer) []string {
+	var lines []string
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+func TestRequestIDIsEchoedAndLogged(t *testing.T) {
+	var buf bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(previous)
+
+	const id = "0123456789abcdef0123456789abcdef"
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/books/1", nil)
+	req.Header.Set(requestIDHeader, id)
+	NewRouter().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if got := rec.Header().Get(requestIDHeader); got != id {
+		t.Fatalf("response request id %q, want %q", got, id)
+	}
+
+	lines := logLines(&buf)
+	if len(lines) != 1 {
+		t.Fatalf("expected exactly one log line, got %d: %q", len(lines), lines)
+	}
+	for _, want := range []string{"method=GET", "path=/books/1", "status=200", "request_id=" + id} {
+		if !strings.Contains(lines[0], want) {
+			t.Fatalf("log line %q is missing %q", lines[0], want)
+		}
+	}
+}
+
+func TestMissingRequestIDIsNotInvented(t *testing.T) {
+	var buf bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(previous)
+
+	rec := httptest.NewRecorder()
+	NewRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/books", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if got := rec.Header().Get(requestIDHeader); got != "" {
+		t.Fatalf("response carries an invented request id %q", got)
+	}
+
+	lines := logLines(&buf)
+	if len(lines) != 1 {
+		t.Fatalf("expected exactly one log line, got %d: %q", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "request_id=(none)") {
+		t.Fatalf("log line %q does not say the id is absent", lines[0])
+	}
+	if invented := regexp.MustCompile(`[0-9a-f]{32}`).FindString(buf.String()); invented != "" {
+		t.Fatalf("log line invents a request id: %q", invented)
+	}
+}
+
+func TestUnknownRouteIsLoggedWithTheRequestID(t *testing.T) {
+	var buf bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(previous)
+
+	const id = "fedcba9876543210fedcba9876543210"
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/books/9999", nil)
+	req.Header.Set(requestIDHeader, id)
+	NewRouter().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	if got := rec.Header().Get(requestIDHeader); got != id {
+		t.Fatalf("response request id %q, want %q", got, id)
+	}
+
+	lines := logLines(&buf)
+	if len(lines) != 1 {
+		t.Fatalf("expected exactly one log line, got %d: %q", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "status=404") {
+		t.Fatalf("log line %q is missing status=404", lines[0])
+	}
+	if !strings.Contains(lines[0], "request_id="+id) {
+		t.Fatalf("log line %q is missing request_id=%s", lines[0], id)
 	}
 }

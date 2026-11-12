@@ -35,7 +35,7 @@ func newRouter(store *BookStore) http.Handler {
 	r.Get("/books", listBooks(store))
 	r.Get("/books/{id}", getBook(store))
 	r.Patch("/books/{id}/availability", setAvailability(store))
-	return r
+	return withRequestID(r)
 }
 
 // availabilityRequest carries the availability a book should be set to. The
