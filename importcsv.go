@@ -83,40 +83,47 @@ type importSummary struct {
 // the catalogue untouched.
 func importBooks(store *BookStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		data, status, message := readImportFile(r)
+		records, status, body := readImportRecords(r)
 		if status != 0 {
-			if message == msgInvalidImportFile {
-				writeJSON(w, status, failureReport(nil))
-				return
-			}
-			writeJSON(w, status, map[string]string{"error": message})
-			return
-		}
-
-		data = stripBOM(data)
-		rows, headerOK := countImportRows(data)
-		if !headerOK {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": msgInvalidHeader})
-			return
-		}
-		switch {
-		case rows == 0:
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": msgEmptyImportFile})
-			return
-		case rows > maxImportRows:
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": msgTooManyRows})
-			return
-		}
-
-		records, failures := parseImportCSV(data)
-		if len(failures) > 0 {
-			writeJSON(w, http.StatusBadRequest, failureReport(failures))
+			writeJSON(w, status, body)
 			return
 		}
 
 		imported, skipped := store.Import(records)
 		writeJSON(w, http.StatusCreated, importSummary{Imported: imported, Skipped: skipped})
 	}
+}
+
+// readImportRecords reads and validates the CSV file carried by a multipart
+// request, sharing the whole-file rules of the import. A status of 0 means
+// records are usable; otherwise status and body describe the answer, with body
+// the exact JSON value to write.
+func readImportRecords(r *http.Request) (records []bookRecord, status int, body any) {
+	data, failStatus, message := readImportFile(r)
+	if failStatus != 0 {
+		if message == msgInvalidImportFile {
+			return nil, failStatus, failureReport(nil)
+		}
+		return nil, failStatus, map[string]string{"error": message}
+	}
+
+	data = stripBOM(data)
+	rows, headerOK := countImportRows(data)
+	if !headerOK {
+		return nil, http.StatusBadRequest, map[string]string{"error": msgInvalidHeader}
+	}
+	switch {
+	case rows == 0:
+		return nil, http.StatusBadRequest, map[string]string{"error": msgEmptyImportFile}
+	case rows > maxImportRows:
+		return nil, http.StatusBadRequest, map[string]string{"error": msgTooManyRows}
+	}
+
+	parsed, failures := parseImportCSV(data)
+	if len(failures) > 0 {
+		return nil, http.StatusBadRequest, failureReport(failures)
+	}
+	return parsed, 0, nil
 }
 
 // readImportFile reads the file part of a multipart request. A status of 0
