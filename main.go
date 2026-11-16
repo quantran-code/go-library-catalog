@@ -32,6 +32,18 @@ func main() {
 	cfg := jobConfigFromEnv(os.Getenv)
 	jobs := newJobService(cfg, store, nil)
 
+	// An unset or unusable object-store configuration only disables the S3
+	// routes: every synchronous route keeps serving either way. Only the names
+	// of the missing variables are logged, never their values.
+	var storage objectStorage
+	if storageCfg, ok := storageConfigFromEnv(os.Getenv); !ok {
+		log.Printf("catalog serves with object storage disabled: S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY and S3_SECRET_KEY are required")
+	} else if built, err := newMinioStorage(storageCfg); err != nil {
+		log.Printf("catalog serves with object storage disabled: %v", err)
+	} else {
+		storage = built
+	}
+
 	// An unset or unreachable broker only disables job submission: the
 	// synchronous routes keep serving either way.
 	queue, err := startJobQueue(ctx, cfg, jobs)
@@ -48,7 +60,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:    ":" + port,
-		Handler: newRouterWithJobs(store, jobs),
+		Handler: newRouterWithStorage(store, jobs, storage),
 	}
 
 	serveErr := make(chan error, 1)
@@ -134,9 +146,16 @@ func newRouter(store *BookStore) http.Handler {
 }
 
 // newRouterWithJobs wires the catalogue API over the given store and import-job
-// service. A nil service is replaced by a disabled one, so the job endpoints
-// answer 503 rather than panicking.
+// service. It carries no object storage, so the upload route answers 503.
 func newRouterWithJobs(store *BookStore, jobs *jobService) http.Handler {
+	return newRouterWithStorage(store, jobs, nil)
+}
+
+// newRouterWithStorage wires the catalogue API over the given store, import-job
+// service and object storage. A nil service is replaced by a disabled one and a
+// nil storage leaves the upload route answering 503, so every other route serves
+// as before.
+func newRouterWithStorage(store *BookStore, jobs *jobService, storage objectStorage) http.Handler {
 	if jobs == nil {
 		jobs = newJobService(jobConfig{}, store, nil)
 	}
@@ -151,11 +170,18 @@ func newRouterWithJobs(store *BookStore, jobs *jobService) http.Handler {
 	r.Get("/books", listBooks(store))
 	r.Get("/books/export", exportBooks(store))
 	r.Post("/books/import", importBooks(store))
+	// The S3 import and export paths are static too, so they are registered
+	// before /books/{id} as well.
+	r.Post("/books/import-s3", importFromS3(store, storage))
+	r.Post("/books/export-s3", exportBooksToS3(store, storage, nil))
 	// The import-job paths are static too, so they are registered before
 	// /books/{id} as well.
 	r.Post("/books/import-jobs", jobs.submitImportJob)
 	r.Get("/books/import-jobs", jobs.listImportJobs)
 	r.Get("/books/import-jobs/{jobId}", jobs.getImportJob)
+	// POST /files stores one uploaded CSV in the private bucket and answers with
+	// a presigned GET for it; a service without storage answers 503.
+	r.Post("/files", uploadFile(storage, nil))
 	r.Get("/books/{id}", getBook(store))
 	r.Patch("/books/{id}/availability", setAvailability(store))
 	return withRequestID(r)

@@ -107,6 +107,14 @@ func readImportRecords(r *http.Request) (records []bookRecord, status int, body 
 		return nil, failStatus, map[string]string{"error": message}
 	}
 
+	return importRecordsFromCSV(data)
+}
+
+// importRecordsFromCSV validates a whole CSV file against the import rules and
+// returns the records that can be added. A status of 0 means records are usable;
+// otherwise status and body describe the answer. It is shared by the uploaded
+// file and the object read from S3, so both paths report the same failures.
+func importRecordsFromCSV(data []byte) (records []bookRecord, status int, body any) {
 	data = stripBOM(data)
 	rows, headerOK := countImportRows(data)
 	if !headerOK {
