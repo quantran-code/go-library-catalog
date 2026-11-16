@@ -77,6 +77,19 @@ func (s *jobService) currentPublisher() batchPublisher {
 // does, records a queued job and publishes one batch message per batch of rows.
 // Nothing is stored when the file is refused or a publish fails, so a 503 always
 // leaves the catalogue untouched.
+//
+// @Summary Submit an asynchronous import job
+// @Description Validates the uploaded file exactly as the synchronous import does, records a queued job and publishes one batch message per batch of rows. Nothing is stored when the file is refused or a publish fails.
+// @Tags import jobs
+// @Accept multipart/form-data
+// @Produce json
+// @Param file formData file true "CSV file with title,author,available"
+// @Success 202 {object} importJobAccepted
+// @Failure 400 {object} importFailureReport "invalid import file with the rejected rows"
+// @Failure 413 {object} map[string]string "file too large"
+// @Failure 415 {object} map[string]string "unsupported file type"
+// @Failure 503 {object} map[string]string "queue unavailable"
+// @Router /books/import-jobs [post]
 func (s *jobService) submitImportJob(w http.ResponseWriter, r *http.Request) {
 	publisher := s.currentPublisher()
 	if publisher == nil {
@@ -119,6 +132,15 @@ func (s *jobService) submitImportJob(w http.ResponseWriter, r *http.Request) {
 
 // getImportJob answers with the status of one import job. An unknown or expired
 // id answers 404, and a service without a broker answers 503.
+//
+// @Summary Get the status of one import job
+// @Tags import jobs
+// @Produce json
+// @Param jobId path string true "Import job id"
+// @Success 200 {object} importJob
+// @Failure 404 {object} map[string]string "job not found"
+// @Failure 503 {object} map[string]string "queue unavailable"
+// @Router /books/import-jobs/{jobId} [get]
 func (s *jobService) getImportJob(w http.ResponseWriter, r *http.Request) {
 	if s.currentPublisher() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": msgQueueUnavailable})
@@ -142,6 +164,13 @@ type importJobsList struct {
 // listImportJobs answers with every live import job of the service. A service
 // without a broker answers 503 like the other job endpoints, so a caller polling
 // the collection learns it is disabled instead of reading an empty list.
+//
+// @Summary List the live import jobs
+// @Tags import jobs
+// @Produce json
+// @Success 200 {object} importJobsList
+// @Failure 503 {object} map[string]string "queue unavailable"
+// @Router /books/import-jobs [get]
 func (s *jobService) listImportJobs(w http.ResponseWriter, _ *http.Request) {
 	if s.currentPublisher() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": msgQueueUnavailable})

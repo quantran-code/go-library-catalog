@@ -53,6 +53,20 @@ func validateObjectKey(key string) bool {
 // object leaves the catalogue untouched. A nil storage leaves the route
 // answering 503, so the service still boots without an object-store
 // configuration.
+//
+// @Summary Import books from a CSV object in the bucket
+// @Description Reads the CSV object named by the key, validates it with the same rules as the synchronous import and adds its rows. The key is validated before the storage client is called, so a refused key never reaches the bucket. A file that carries invalid rows answers the rejected rows rather than a single error.
+// @Tags books
+// @Accept json
+// @Produce json
+// @Param body body importS3Request true "Key of the CSV object in the bucket"
+// @Success 201 {object} importSummary
+// @Failure 400 {object} map[string]string "invalid key"
+// @Failure 404 {object} map[string]string "file not found"
+// @Failure 413 {object} map[string]string "file too large"
+// @Failure 502 {object} map[string]string "storage unavailable"
+// @Failure 503 {object} map[string]string "storage unavailable"
+// @Router /books/import-s3 [post]
 func importFromS3(store *BookStore, storage objectStorage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if storage == nil {

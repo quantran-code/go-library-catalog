@@ -57,6 +57,20 @@ func presignLifetime(storage objectStorage) time.Duration {
 // server-generated key and answers with a short-lived presigned GET for it. A
 // nil storage leaves the route answering 503, so the service still boots and
 // serves every synchronous route without an object-store configuration.
+//
+// @Summary Upload one CSV file to the bucket
+// @Description Stores exactly one uploaded CSV under a server-generated key and answers with a short-lived presigned GET for it. The caller never chooses the key and never overwrites an object.
+// @Tags files
+// @Accept multipart/form-data
+// @Produce json
+// @Param file formData file true "CSV file to store"
+// @Success 201 {object} uploadResponse
+// @Failure 400 {object} map[string]string "file required"
+// @Failure 413 {object} map[string]string "file too large"
+// @Failure 415 {object} map[string]string "unsupported file type"
+// @Failure 502 {object} map[string]string "storage unavailable"
+// @Failure 503 {object} map[string]string "storage unavailable"
+// @Router /files [post]
 func uploadFile(storage objectStorage, now func() time.Time) http.HandlerFunc {
 	if now == nil {
 		now = time.Now

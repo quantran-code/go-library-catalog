@@ -29,6 +29,15 @@ type exportS3Response struct {
 // buffer before the single Put, so a failure leaves no partial object. A nil
 // storage leaves the route answering 503, so the service still boots without an
 // object-store configuration.
+//
+// @Summary Export the catalogue to the bucket
+// @Description Renders the whole catalogue as books.csv, stores it under a server-generated key and answers with a short-lived presigned GET for it. The bytes are rendered before the single store call, so a failure leaves no partial object.
+// @Tags books
+// @Produce json
+// @Success 201 {object} exportS3Response
+// @Failure 502 {object} map[string]string "storage unavailable"
+// @Failure 503 {object} map[string]string "storage unavailable"
+// @Router /books/export-s3 [post]
 func exportBooksToS3(store *BookStore, storage objectStorage, now func() time.Time) http.HandlerFunc {
 	if now == nil {
 		now = time.Now

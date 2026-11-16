@@ -52,6 +52,13 @@ func renderBooksCSV(books []Book) ([]byte, error) {
 }
 
 // exportBooks answers with the whole catalogue as a CSV download.
+//
+// @Summary Export the catalogue as CSV
+// @Tags books
+// @Produce text/csv
+// @Success 200 {string} string "the whole catalogue as RFC 4180 CSV"
+// @Failure 502 {object} map[string]string "books export failed"
+// @Router /books/export [get]
 func exportBooks(store *BookStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		body, err := renderBooksCSV(store.List())

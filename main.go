@@ -1,4 +1,18 @@
 // Command catalog owns the books the library holds.
+//
+// The general API information below is read by swaggo/swag from this file,
+// which is the file the go:generate directive names with -g. There is
+// deliberately no @host, so the served document stays relative to the host that
+// serves it, and no production host is written down. @title and @version repeat
+// apiTitle and apiVersion, which the tests compare the generated document
+// against.
+//
+// @title Library Catalogue API
+// @version 1.0.0
+// @description The catalogue service exposes books with paging and search, availability, CSV import and export, asynchronous import jobs and object-store upload, import and export.
+// @BasePath /
+//
+//go:generate go run github.com/swaggo/swag/cmd/swag@v1.16.6 init -g main.go -o docs
 package main
 
 import (
@@ -17,6 +31,17 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+)
+
+// The general API information of the served document, in one place: apiTitle and
+// apiVersion are the @title and @version repeated by the swaggo comment block
+// above package main, and swagVersion is the generator version the go:generate
+// directive pins, so the directive and the reproducibility check cannot drift
+// apart.
+const (
+	apiTitle    = "Library Catalogue API"
+	apiVersion  = "1.0.0"
+	swagVersion = "v1.16.6"
 )
 
 func main() {
@@ -156,15 +181,21 @@ func newRouterWithJobs(store *BookStore, jobs *jobService) http.Handler {
 // nil storage leaves the upload route answering 503, so every other route serves
 // as before.
 func newRouterWithStorage(store *BookStore, jobs *jobService, storage objectStorage) http.Handler {
+	return withRequestID(catalogueRouter(store, jobs, storage))
+}
+
+// catalogueRouter builds the route table of the catalogue API over the given
+// store, import-job service and object storage. A nil service is replaced by a
+// disabled one and a nil storage leaves the upload route answering 503, so every
+// other route serves as before. The chi router is returned unwrapped, so a test
+// can walk its route tree.
+func catalogueRouter(store *BookStore, jobs *jobService, storage objectStorage) chi.Router {
 	if jobs == nil {
 		jobs = newJobService(jobConfig{}, store, nil)
 	}
 
 	r := chi.NewRouter()
-	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-	})
+	r.Get("/health", healthCheck)
 	// The static import and export paths are registered before /books/{id} so
 	// neither is ever read as an id.
 	r.Get("/books", listBooks(store))
@@ -182,9 +213,24 @@ func newRouterWithStorage(store *BookStore, jobs *jobService, storage objectStor
 	// POST /files stores one uploaded CSV in the private bucket and answers with
 	// a presigned GET for it; a service without storage answers 503.
 	r.Post("/files", uploadFile(storage, nil))
+	// The Swagger UI and the generated document sit under /swagger/, so one
+	// wildcard serves doc.json, index.html and the embedded UI assets.
+	r.Get("/swagger/*", swaggerUI())
 	r.Get("/books/{id}", getBook(store))
 	r.Patch("/books/{id}/availability", setAvailability(store))
-	return withRequestID(r)
+	return r
+}
+
+// healthCheck reports that the service is up.
+//
+// @Summary Report that the service is up
+// @Tags health
+// @Produce json
+// @Success 200 {object} map[string]string "the service is up"
+// @Router /health [get]
+func healthCheck(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 // availabilityRequest carries the availability a book should be set to. The
@@ -253,6 +299,17 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 }
 
 // setAvailability puts the book named in the path on or off the shelf.
+//
+// @Summary Change the availability of one book
+// @Tags books
+// @Accept json
+// @Produce json
+// @Param id path int true "Book id"
+// @Param body body availabilityRequest true "Availability to set"
+// @Success 200 {object} Book
+// @Failure 400 {object} map[string]string "invalid request body"
+// @Failure 404 {object} map[string]string "book not found"
+// @Router /books/{id}/availability [patch]
 func setAvailability(store *BookStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req availabilityRequest
@@ -278,6 +335,17 @@ func setAvailability(store *BookStore) http.HandlerFunc {
 
 // listBooks answers with one page of the catalogue, narrowed by an optional
 // case-insensitive search over the title and the author.
+//
+// @Summary List the books of the catalogue
+// @Description Returns one page of books together with the total number of matches before paging, optionally narrowed by a case-insensitive search over the title and the author. A page outside the allowed range makes the whole query invalid.
+// @Tags books
+// @Produce json
+// @Param page query int false "Page number, starting at 1" minimum(1)
+// @Param page_size query int false "Page size, at most 100" minimum(1) maximum(100)
+// @Param q query string false "Case-insensitive search over the title and the author"
+// @Success 200 {object} bookPage
+// @Failure 400 {object} map[string]string "invalid paging"
+// @Router /books [get]
 func listBooks(store *BookStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		params, ok := parsePaging(r.URL.Query())
@@ -301,6 +369,14 @@ func listBooks(store *BookStore) http.HandlerFunc {
 }
 
 // getBook answers with the single book named in the path.
+//
+// @Summary Get one book
+// @Tags books
+// @Produce json
+// @Param id path int true "Book id"
+// @Success 200 {object} Book
+// @Failure 404 {string} string "book not found"
+// @Router /books/{id} [get]
 func getBook(store *BookStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.Atoi(chi.URLParam(r, "id"))

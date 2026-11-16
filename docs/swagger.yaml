@@ -1,0 +1,555 @@
+basePath: /
+definitions:
+  main.Book:
+    properties:
+      author:
+        type: string
+      available:
+        type: boolean
+      id:
+        type: integer
+      title:
+        type: string
+    type: object
+  main.availabilityRequest:
+    properties:
+      available:
+        type: boolean
+    type: object
+  main.bookPage:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/main.Book'
+        type: array
+      page:
+        type: integer
+      page_size:
+        type: integer
+      total:
+        type: integer
+    type: object
+  main.exportS3Response:
+    properties:
+      expiresAt:
+        type: string
+      key:
+        type: string
+      size:
+        type: integer
+      url:
+        type: string
+    type: object
+  main.importFailureReport:
+    properties:
+      error:
+        type: string
+      more:
+        type: boolean
+      rows:
+        items:
+          $ref: '#/definitions/main.importRowError'
+        type: array
+    type: object
+  main.importJob:
+    properties:
+      batches:
+        type: integer
+      completedBatches:
+        type: integer
+      createdAt:
+        type: string
+      error:
+        type: string
+      errors:
+        items:
+          $ref: '#/definitions/main.importRowError'
+        type: array
+      imported:
+        type: integer
+      jobId:
+        type: string
+      more:
+        type: boolean
+      processedRows:
+        type: integer
+      skipped:
+        type: integer
+      status:
+        $ref: '#/definitions/main.jobStatus'
+      totalRows:
+        type: integer
+      updatedAt:
+        type: string
+    type: object
+  main.importJobAccepted:
+    properties:
+      batchSize:
+        type: integer
+      batches:
+        type: integer
+      jobId:
+        type: string
+      status:
+        $ref: '#/definitions/main.jobStatus'
+      totalRows:
+        type: integer
+    type: object
+  main.importJobsList:
+    properties:
+      jobs:
+        items:
+          $ref: '#/definitions/main.importJob'
+        type: array
+    type: object
+  main.importRowError:
+    properties:
+      error:
+        type: string
+      line:
+        type: integer
+    type: object
+  main.importS3Request:
+    properties:
+      key:
+        type: string
+    type: object
+  main.importSummary:
+    properties:
+      imported:
+        type: integer
+      skipped:
+        type: integer
+    type: object
+  main.jobStatus:
+    enum:
+    - queued
+    - processing
+    - completed
+    - failed
+    type: string
+    x-enum-varnames:
+    - jobStatusQueued
+    - jobStatusProcessing
+    - jobStatusCompleted
+    - jobStatusFailed
+  main.uploadResponse:
+    properties:
+      contentType:
+        type: string
+      expiresAt:
+        type: string
+      key:
+        type: string
+      size:
+        type: integer
+      url:
+        type: string
+    type: object
+info:
+  contact: {}
+  description: The catalogue service exposes books with paging and search, availability,
+    CSV import and export, asynchronous import jobs and object-store upload, import
+    and export.
+  title: Library Catalogue API
+  version: 1.0.0
+paths:
+  /books:
+    get:
+      description: Returns one page of books together with the total number of matches
+        before paging, optionally narrowed by a case-insensitive search over the title
+        and the author. A page outside the allowed range makes the whole query invalid.
+      parameters:
+      - description: Page number, starting at 1
+        in: query
+        minimum: 1
+        name: page
+        type: integer
+      - description: Page size, at most 100
+        in: query
+        maximum: 100
+        minimum: 1
+        name: page_size
+        type: integer
+      - description: Case-insensitive search over the title and the author
+        in: query
+        name: q
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.bookPage'
+        "400":
+          description: invalid paging
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List the books of the catalogue
+      tags:
+      - books
+  /books/{id}:
+    get:
+      parameters:
+      - description: Book id
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.Book'
+        "404":
+          description: book not found
+          schema:
+            type: string
+      summary: Get one book
+      tags:
+      - books
+  /books/{id}/availability:
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Book id
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Availability to set
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/main.availabilityRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.Book'
+        "400":
+          description: invalid request body
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: book not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Change the availability of one book
+      tags:
+      - books
+  /books/export:
+    get:
+      produces:
+      - text/csv
+      responses:
+        "200":
+          description: the whole catalogue as RFC 4180 CSV
+          schema:
+            type: string
+        "502":
+          description: books export failed
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Export the catalogue as CSV
+      tags:
+      - books
+  /books/export-s3:
+    post:
+      description: Renders the whole catalogue as books.csv, stores it under a server-generated
+        key and answers with a short-lived presigned GET for it. The bytes are rendered
+        before the single store call, so a failure leaves no partial object.
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/main.exportS3Response'
+        "502":
+          description: storage unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: storage unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Export the catalogue to the bucket
+      tags:
+      - books
+  /books/import:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Validates the whole uploaded file before anything is added, so
+        a refused file leaves the catalogue untouched. A file that fails a whole-file
+        rule (missing file, unsupported type, too large, invalid header, no rows,
+        too many rows) answers a single error; a file carrying invalid rows answers
+        the rejected rows.
+      parameters:
+      - description: CSV file with title,author,available
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/main.importSummary'
+        "400":
+          description: invalid import file with the rejected rows
+          schema:
+            $ref: '#/definitions/main.importFailureReport'
+        "413":
+          description: file too large
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "415":
+          description: unsupported file type
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Import books from a CSV file
+      tags:
+      - books
+  /books/import-jobs:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.importJobsList'
+        "503":
+          description: queue unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List the live import jobs
+      tags:
+      - import jobs
+    post:
+      consumes:
+      - multipart/form-data
+      description: Validates the uploaded file exactly as the synchronous import does,
+        records a queued job and publishes one batch message per batch of rows. Nothing
+        is stored when the file is refused or a publish fails.
+      parameters:
+      - description: CSV file with title,author,available
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/main.importJobAccepted'
+        "400":
+          description: invalid import file with the rejected rows
+          schema:
+            $ref: '#/definitions/main.importFailureReport'
+        "413":
+          description: file too large
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "415":
+          description: unsupported file type
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: queue unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Submit an asynchronous import job
+      tags:
+      - import jobs
+  /books/import-jobs/{jobId}:
+    get:
+      parameters:
+      - description: Import job id
+        in: path
+        name: jobId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.importJob'
+        "404":
+          description: job not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: queue unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get the status of one import job
+      tags:
+      - import jobs
+  /books/import-s3:
+    post:
+      consumes:
+      - application/json
+      description: Reads the CSV object named by the key, validates it with the same
+        rules as the synchronous import and adds its rows. The key is validated before
+        the storage client is called, so a refused key never reaches the bucket. A
+        file that carries invalid rows answers the rejected rows rather than a single
+        error.
+      parameters:
+      - description: Key of the CSV object in the bucket
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/main.importS3Request'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/main.importSummary'
+        "400":
+          description: invalid key
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: file not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "413":
+          description: file too large
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "502":
+          description: storage unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: storage unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Import books from a CSV object in the bucket
+      tags:
+      - books
+  /files:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Stores exactly one uploaded CSV under a server-generated key and
+        answers with a short-lived presigned GET for it. The caller never chooses
+        the key and never overwrites an object.
+      parameters:
+      - description: CSV file to store
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/main.uploadResponse'
+        "400":
+          description: file required
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "413":
+          description: file too large
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "415":
+          description: unsupported file type
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "502":
+          description: storage unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: storage unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Upload one CSV file to the bucket
+      tags:
+      - files
+  /health:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: the service is up
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Report that the service is up
+      tags:
+      - health
+swagger: "2.0"

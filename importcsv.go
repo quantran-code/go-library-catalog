@@ -81,6 +81,18 @@ type importSummary struct {
 // importBooks seeds or refreshes the catalogue from one uploaded CSV file. The
 // whole file is validated before anything is added, so a refused file leaves
 // the catalogue untouched.
+//
+// @Summary Import books from a CSV file
+// @Description Validates the whole uploaded file before anything is added, so a refused file leaves the catalogue untouched. A file that fails a whole-file rule (missing file, unsupported type, too large, invalid header, no rows, too many rows) answers a single error; a file carrying invalid rows answers the rejected rows.
+// @Tags books
+// @Accept multipart/form-data
+// @Produce json
+// @Param file formData file true "CSV file with title,author,available"
+// @Success 201 {object} importSummary
+// @Failure 400 {object} importFailureReport "invalid import file with the rejected rows"
+// @Failure 413 {object} map[string]string "file too large"
+// @Failure 415 {object} map[string]string "unsupported file type"
+// @Router /books/import [post]
 func importBooks(store *BookStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		records, status, body := readImportRecords(r)
